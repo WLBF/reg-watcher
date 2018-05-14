@@ -6,34 +6,39 @@ extern crate widestring;
 extern crate winapi;
 extern crate winreg;
 
-use std::ptr;
-use std::time::Duration;
-use std::thread;
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+pub mod stream;
+
+use std::{
+    ptr,
+    time::Duration,
+    thread,
+    sync::mpsc::{channel, Receiver, Sender, TryRecvError},
+};
 use failure::Error;
-
-use futures::stream::Stream;
-use futures::prelude::*;
-use futures::task::Context;
-
-use winapi::um::winnt::*;
-use winapi::um::winreg::*;
-use winapi::um::synchapi::{CreateEventW, WaitForSingleObject};
-use winapi::um::handleapi::CloseHandle;
-use winapi::um::winbase::*;
+use winapi::{
+    um::{
+        winnt::*,
+        winreg::*,
+        synchapi::{CreateEventW, WaitForSingleObject},
+        handleapi::CloseHandle,
+        winbase::*,
+        errhandlingapi::GetLastError,
+    },
+};
 use winapi::shared::winerror::*;
-use winapi::um::errhandlingapi::GetLastError;
 use winreg::RegKey;
 use widestring::WideCString;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy)]
-pub enum NotifyFilter {
-    ChangeName = 0x00000001,
-    ChangeAttributes = 0x00000002,
-    ChangeLastSet = 0x00000004,
-    ChangeSecurity = 0x00000008,
-    ThreadAgnostic = 0x10000000,
+pub mod filter {
+    pub use winapi::um::winnt::{
+        REG_NOTIFY_CHANGE_NAME,
+        REG_NOTIFY_CHANGE_ATTRIBUTES,
+        REG_NOTIFY_CHANGE_LAST_SET,
+        REG_NOTIFY_CHANGE_SECURITY,
+        REG_NOTIFY_THREAD_AGNOSTIC,
+        REG_LEGAL_CHANGE_FILTER,
+    };
 }
 
 pub enum Timeout {
@@ -64,14 +69,15 @@ impl Drop for WaitEvent {
     }
 }
 
+#[derive(Debug)]
 pub enum WatchResponse {
     Notify,
     Timeout,
 }
 
 pub fn watch(
-    reg_key: RegKey,
-    notify_filter: NotifyFilter,
+    reg_key: &RegKey,
+    notify_filter: u32,
     watch_subtree: bool,
     timeout: Timeout,
 ) -> Result<WatchResponse, Error> {
@@ -87,9 +93,9 @@ pub fn watch(
 
     unsafe {
         let ret = RegNotifyChangeKeyValue(
-            reg_key.handle(),
+            reg_key.raw_handle(),
             watch_subtree as i32,
-            notify_filter as u32,
+            notify_filter,
             wait_handle.handle(),
             true as i32,
         );
@@ -112,8 +118,8 @@ pub fn watch(
 }
 
 pub struct Watcher {
-    reg_key: RegKey,
-    notify_filter: NotifyFilter,
+    reg_key: Option<RegKey>,
+    notify_filter: u32,
     watch_subtree: bool,
     tick_duration: Duration,
     handle: Option<thread::JoinHandle<()>>,
@@ -123,12 +129,12 @@ pub struct Watcher {
 impl Watcher {
     pub fn new(
         reg_key: RegKey,
-        notify_filter: NotifyFilter,
+        notify_filter: u32,
         watch_subtree: bool,
-        tick_duration: Duration,
-    ) -> Self {
+        tick_duration: Duration) -> Self
+    {
         Self {
-            reg_key,
+            reg_key: Some(reg_key),
             notify_filter,
             watch_subtree,
             tick_duration,
@@ -137,51 +143,33 @@ impl Watcher {
         }
     }
 
-    pub fn watch_async(&mut self, sender: Sender<WatchResponse>) -> Result<(), Error> {
+    pub fn watch_async(
+        &mut self,
+        sender: Sender<WatchResponse>) -> Result<(), Error>
+    {
         let builder = thread::Builder::new().name("reg-watcher".into());
-        let reg_key = self.reg_key.clone();
+        let reg_key = self.reg_key.take().ok_or(format_err!("watcher none registry handle"))?;
         let notify_filter = self.notify_filter;
         let watch_subtree = self.watch_subtree;
         let tick_duration = self.tick_duration;
-        let handle = builder.spawn(move || loop {
-            match watch(
-                reg_key.clone(),
-                notify_filter,
-                watch_subtree,
-                Timeout::Infinite,
-            ) {
-                Err(e) => panic!("call watcher.watch err: {:?}", e),
-                Ok(v) => sender
-                    .send(v)
-                    .unwrap_or_else(|e| panic!("invalid sender: {:?}", e)),
-            };
-            thread::sleep(tick_duration);
+        let handle = builder.spawn(move || {
+            loop {
+                match watch(
+                    &reg_key,
+                    notify_filter,
+                    watch_subtree,
+                    Timeout::Infinite,
+                ) {
+                    Err(e) => panic!("call watcher.watch err: {:?}", e),
+                    Ok(v) => sender
+                        .send(v)
+                        .unwrap_or_else(|e| panic!("invalid sender: {:?}", e)),
+                };
+                thread::sleep(tick_duration);
+            }
         })?;
         self.handle = Some(handle);
         Ok(())
     }
 
-}
-
-impl Stream for Watcher {
-    type Item = WatchResponse;
-    type Error = Error;
-
-    fn poll_next(&mut self, _cx: &mut Context) -> Result<Async<Option<Self::Item>>, Self::Error> {
-        if self.handle.is_none() {
-            let (sender, receiver) = channel();
-            self.stream_receiver = Some(receiver);
-            self.watch_async(sender)?;
-        }
-
-        if let Some(ref rx) = self.stream_receiver {
-            return match rx.try_recv() {
-                Ok(v) => Ok(Async::Ready(Some(v))),
-                Err(TryRecvError::Empty) => Ok(Async::Pending),
-                Err(e) => Err(format_err!("stream_receiver try_recv: {}", e)),
-            };
-        }
-
-        Ok(Async::Pending)
-    }
 }
