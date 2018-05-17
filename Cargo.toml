@@ -4,9 +4,10 @@ version = "0.1.0"
 authors = ["wlbf <lbf1353@live.com>"]
 
 [dependencies]
-winreg = { path = "../winreg-rs"}
+winreg = { git = "https://github.com/WLBF/winreg-rs"}
 failure = "0.1.1"
 uuid = { version = "0.6.0", features = ["v4"] }
 widestring = "0.2.2"
 winapi = { version = "0.3.4", features = ["synchapi", "winbase", "errhandlingapi"] }
-futures = "0.2.1"
+futures = "0.1"
+tokio-core = "0.1"

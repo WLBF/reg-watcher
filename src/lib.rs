@@ -12,7 +12,7 @@ use std::{
     ptr,
     time::Duration,
     thread,
-    sync::mpsc::{channel, Receiver, Sender, TryRecvError},
+    sync::mpsc::Sender,
 };
 use failure::Error;
 use winapi::{
@@ -123,7 +123,6 @@ pub struct Watcher {
     watch_subtree: bool,
     tick_duration: Duration,
     handle: Option<thread::JoinHandle<()>>,
-    stream_receiver: Option<Receiver<WatchResponse>>
 }
 
 impl Watcher {
@@ -139,7 +138,6 @@ impl Watcher {
             watch_subtree,
             tick_duration,
             handle: None,
-            stream_receiver: None,
         }
     }
 
@@ -171,5 +169,4 @@ impl Watcher {
         self.handle = Some(handle);
         Ok(())
     }
-
 }
