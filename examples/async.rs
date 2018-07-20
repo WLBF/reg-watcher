@@ -1,11 +1,9 @@
-extern crate futures;
 extern crate reg_watcher;
 extern crate winreg;
-extern crate tokio;
 
-use futures::prelude::*;
 use std::{
     time::Duration,
+    sync::mpsc::channel,
 };
 use winreg::{
     RegKey,
@@ -17,13 +15,11 @@ fn main() {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let reg_key = hklm.open_subkey(r#"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"#).unwrap();
     let w = Watcher::new(reg_key, filter::REG_LEGAL_CHANGE_FILTER, true, Duration::from_secs(1));
+    let (sender, receiver) = channel();
+    let _ = w.watch_async(sender);
 
-    let fut = w.for_each(|_| {
-        println!("notify");
-        Ok(())
-    }).map_err(|err| {
-        println!("accept error = {:?}", err);
-    });
-
-    tokio::run(fut);
+    loop {
+        let res = receiver.recv().unwrap();
+        println!("{:?}", res);
+    }
 }

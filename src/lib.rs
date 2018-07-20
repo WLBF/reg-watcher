@@ -6,13 +6,11 @@ extern crate widestring;
 extern crate winapi;
 extern crate winreg;
 
-pub mod stream;
-
 use std::{
     ptr,
     time::Duration,
     thread,
-    sync::mpsc::Sender,
+    sync::mpsc::{channel, Receiver, Sender, TryRecvError},
 };
 use failure::Error;
 use winapi::{
@@ -29,6 +27,10 @@ use winapi::shared::winerror::*;
 use winreg::RegKey;
 use widestring::WideCString;
 use uuid::Uuid;
+use futures::{
+    stream::Stream,
+    prelude::*,
+};
 
 pub mod filter {
     pub use winapi::um::winnt::{
@@ -81,6 +83,8 @@ pub fn watch(
     watch_subtree: bool,
     timeout: Timeout,
 ) -> Result<WatchResponse, Error> {
+
+    // generate unique name for wait event
     let uid = Uuid::new_v4().hyphenated().to_string() + "-reg-watcher";
     let name = WideCString::from_str(uid)?;
 
@@ -123,6 +127,7 @@ pub struct Watcher {
     watch_subtree: bool,
     tick_duration: Duration,
     handle: Option<thread::JoinHandle<()>>,
+    stream_receiver: Option<Receiver<WatchResponse>>
 }
 
 impl Watcher {
@@ -138,35 +143,92 @@ impl Watcher {
             watch_subtree,
             tick_duration,
             handle: None,
+            stream_receiver: None,
         }
     }
 
     pub fn watch_async(
-        &mut self,
+        mut self,
         sender: Sender<WatchResponse>) -> Result<(), Error>
     {
         let builder = thread::Builder::new().name("reg-watcher".into());
-        let reg_key = self.reg_key.take().ok_or(format_err!("watcher none registry handle"))?;
-        let notify_filter = self.notify_filter;
-        let watch_subtree = self.watch_subtree;
-        let tick_duration = self.tick_duration;
+        let reg_key = self.reg_key.take().ok_or(format_err!("watcher none registry key"))?;
+        
+        //start the external watching thread
         let handle = builder.spawn(move || {
             loop {
                 match watch(
                     &reg_key,
-                    notify_filter,
-                    watch_subtree,
+                    self.notify_filter,
+                    self.watch_subtree,
                     Timeout::Infinite,
                 ) {
                     Err(e) => panic!("call watcher.watch err: {:?}", e),
-                    Ok(v) => sender
-                        .send(v)
+                    Ok(v) => sender.send(v)
                         .unwrap_or_else(|e| panic!("invalid sender: {:?}", e)),
                 };
-                thread::sleep(tick_duration);
+                thread::sleep(self.tick_duration);
             }
         })?;
         self.handle = Some(handle);
         Ok(())
+    }
+}
+
+impl Stream for Watcher {
+    type Item = WatchResponse;
+    type Error = Error;
+
+    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
+        match (self.reg_key.is_some(), self.handle.is_some()) {
+            // start external watching thread at first poll
+            (true, false) => {
+                let builder = thread::Builder::new().name("reg-watcher".into());
+                let reg_key = self.reg_key.take().unwrap(); // 'None' already handled before
+                let notify_filter = self.notify_filter;
+                let watch_subtree = self.watch_subtree;
+                let tick_duration = self.tick_duration;
+                let (sender, receiver) = channel();
+                self.stream_receiver = Some(receiver);
+
+                // get current task handle
+                let task_handle = futures::task::current();
+
+                //start the external watching thread
+                let handle = builder.spawn(move || {
+                    loop {
+                        match watch(
+                            &reg_key,
+                            notify_filter,
+                            watch_subtree,
+                            Timeout::Infinite,
+                        ) {
+                            Err(e) => panic!("call watcher.watch err: {:?}", e),
+                            Ok(v) => {
+                                // send the response
+                                sender.send(v).unwrap_or_else(|e| panic!("invalid sender: {:?}", e));
+                                //notify the executor to poll this task
+                                task_handle.notify()
+                            }, 
+                        };
+                        thread::sleep(tick_duration);
+                    }
+                })?;
+                self.handle = Some(handle);
+                Ok(Async::NotReady)
+            }
+            (false, true) => {
+                if let Some(ref rx) = self.stream_receiver {
+                    match rx.try_recv() {
+                        Ok(v) => Ok(Async::Ready(Some(v))),
+                        Err(TryRecvError::Empty) => Ok(Async::NotReady),
+                        Err(e) => Err(format_err!("stream_receiver try_recv: {}", e)),
+                    }
+                } else {
+                    unreachable!()
+                }
+            }
+            (_, _) => Err(format_err!("watcher thread does not exist")),
+        }
     }
 }
