@@ -5,7 +5,6 @@ authors = ["wlbf <lbf1353@live.com>"]
 
 [dependencies]
 winreg = "0.5.1"
-# winreg = { git = "https://github.com/WLBF/winreg-rs"}
 failure = "0.1.1"
 uuid = { version = "0.6.0", features = ["v4"] }
 widestring = "0.2.2"

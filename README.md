@@ -5,7 +5,7 @@ Rust binding to MS Windows `RegNotifyChangeKeyValue` API. Work in progress.
 ## Features
 
 * synchronous and asynchronous API for registry change watching
-* [tokio](https://tokio.rs/) stream API
+* [Tokio](https://tokio.rs/) stream API
 
 ## Usage
 
@@ -32,7 +32,6 @@ fn main() {
     let res = watch(&reg_key, filter::REG_LEGAL_CHANGE_FILTER, true, Timeout::Milli(60 * 1000)).unwrap();
     println!("{:?}", res);
 }
-
 ```
 
 ### Async
@@ -63,7 +62,6 @@ fn main() {
         println!("{:?}", res);
     }
 }
-
 ```
 
 ### Stream
@@ -98,5 +96,4 @@ fn main() {
 
     tokio::run(fut);
 }
-
 ```

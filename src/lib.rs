@@ -1,3 +1,102 @@
+//!Rust binding to MS Windows `RegNotifyChangeKeyValue` API. Work in progress.
+//!
+//!## Features
+//!
+//!* synchronous and asynchronous API for registry change watching
+//!* [Tokio](https://tokio.rs/) stream API
+//!
+//!## Usage
+//!
+//!```toml,ignore
+//![dependencies]
+//!reg-watcher = "0.1"
+//!```
+//!
+//!### Basic usage
+//!
+//!```no_run
+//!extern crate reg_watcher;
+//!extern crate winreg;
+//!
+//!use winreg::{
+//!    RegKey,
+//!    enums::*,
+//!};
+//!use reg_watcher::*;
+//!
+//!fn main() {
+//!    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+//!    let reg_key = hklm.open_subkey(r#"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"#).unwrap();
+//!    let res = watch(&reg_key, filter::REG_LEGAL_CHANGE_FILTER, true, Timeout::Milli(60 * 1000)).unwrap();
+//!    println!("{:?}", res);
+//!}
+//!```
+//!
+//!### Async
+//!
+//!```no_run
+//!extern crate reg_watcher;
+//!extern crate winreg;
+//!
+//!use std::{
+//!    time::Duration,
+//!    sync::mpsc::channel,
+//!};
+//!use winreg::{
+//!    RegKey,
+//!    enums::*,
+//!};
+//!use reg_watcher::*;
+//!
+//!fn main() {
+//!    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+//!    let reg_key = hklm.open_subkey(r#"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"#).unwrap();
+//!    let w = Watcher::new(reg_key, filter::REG_LEGAL_CHANGE_FILTER, true, Duration::from_secs(1));
+//!    let (sender, receiver) = channel();
+//!    let _ = w.watch_async(sender);
+//!
+//!    loop {
+//!        let res = receiver.recv().unwrap();
+//!        println!("{:?}", res);
+//!    }
+//!}
+//!```
+//!
+//!### Stream
+//!
+//!```no_run
+//!extern crate futures;
+//!extern crate reg_watcher;
+//!extern crate winreg;
+//!extern crate tokio;
+//!
+//!use futures::prelude::*;
+//!use std::{
+//!    time::Duration,
+//!};
+//!use winreg::{
+//!    RegKey,
+//!    enums::*,
+//!};
+//!use reg_watcher::*;
+//!
+//!fn main() {
+//!    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+//!    let reg_key = hklm.open_subkey(r#"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"#).unwrap();
+//!    let w = Watcher::new(reg_key, filter::REG_LEGAL_CHANGE_FILTER, true, Duration::from_secs(1));
+//!
+//!    let fut = w.for_each(|_| {
+//!        println!("notify");
+//!        Ok(())
+//!    }).map_err(|err| {
+//!        println!("accept error = {:?}", err);
+//!    });
+//!
+//!    tokio::run(fut);
+//!}
+//!```
+
+
 #[macro_use]
 extern crate failure;
 extern crate futures;
@@ -32,6 +131,7 @@ use futures::{
     prelude::*,
 };
 
+/// Reexport notify filters
 pub mod filter {
     pub use winapi::um::winnt::{
         REG_NOTIFY_CHANGE_NAME,
@@ -43,6 +143,7 @@ pub mod filter {
     };
 }
 
+/// Timeout value for `watch` function
 pub enum Timeout {
     Milli(u32),
     Infinite,
@@ -71,12 +172,15 @@ impl Drop for WaitEvent {
     }
 }
 
+/// Watching response returned by `watch`
 #[derive(Debug)]
 pub enum WatchResponse {
     Notify,
     Timeout,
 }
 
+/// Watch a specific registry key.
+/// Block the thread until the changing notify occur or timeout expired.
 pub fn watch(
     reg_key: &RegKey,
     notify_filter: u32,
@@ -121,6 +225,8 @@ pub fn watch(
     }
 }
 
+/// Watcher for asynchronous watching
+/// Also can be used as a [Tokio](https://tokio.rs/) stream.
 pub struct Watcher {
     reg_key: Option<RegKey>,
     notify_filter: u32,
@@ -131,6 +237,7 @@ pub struct Watcher {
 }
 
 impl Watcher {
+    /// return a new `watcher`
     pub fn new(
         reg_key: RegKey,
         notify_filter: u32,
@@ -147,6 +254,8 @@ impl Watcher {
         }
     }
 
+    /// Create a external thread to Watch a specific registry key.
+    /// Pass `WatchResponse` by predefined `Sender` 
     pub fn watch_async(
         mut self,
         sender: Sender<WatchResponse>) -> Result<(), Error>
@@ -175,6 +284,7 @@ impl Watcher {
     }
 }
 
+/// [Stream](https://docs.rs/futures/0.1.23/futures/stream/trait.Stream.html) implemention for `Watcher`
 impl Stream for Watcher {
     type Item = WatchResponse;
     type Error = Error;
@@ -184,7 +294,7 @@ impl Stream for Watcher {
             // start external watching thread at first poll
             (true, false) => {
                 let builder = thread::Builder::new().name("reg-watcher".into());
-                let reg_key = self.reg_key.take().unwrap(); // 'None' already handled before
+                let reg_key = self.reg_key.take().unwrap(); // `None` already handled before
                 let notify_filter = self.notify_filter;
                 let watch_subtree = self.watch_subtree;
                 let tick_duration = self.tick_duration;
@@ -219,6 +329,7 @@ impl Stream for Watcher {
             }
             (false, true) => {
                 if let Some(ref rx) = self.stream_receiver {
+                    // when get polled again, try to receive `WatchRespone` by calling `try_recv`
                     match rx.try_recv() {
                         Ok(v) => Ok(Async::Ready(Some(v))),
                         Err(TryRecvError::Empty) => Ok(Async::NotReady),
