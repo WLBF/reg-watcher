@@ -1,5 +1,6 @@
 # reg-watcher
 
+[![Crates.io](https://img.shields.io/crates/v/reg-watcher.svg)](https://crates.io/crates/reg-watcher)
 [![Build status](https://ci.appveyor.com/api/projects/status/7iunbtfa6onjudks/branch/master?svg=true)](https://ci.appveyor.com/project/WLBF/reg-watcher/branch/master)
 
 Rust binding to MS Windows `RegNotifyChangeKeyValue` API.
