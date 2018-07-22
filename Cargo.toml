@@ -2,6 +2,15 @@
 name = "reg-watcher"
 version = "0.1.0"
 authors = ["wlbf <lbf1353@live.com>"]
+license = "MIT"
+description = "A rust library for single instance application."
+repository = "https://github.com/WLBF/reg-watcher"
+readme = "README.md"
+keywords = ["reg", "registry", "watch"]
+include = [
+    "src/*.rs",
+    "Cargo.toml",
+]
 
 [dependencies]
 winreg = "0.5.1"
