@@ -14,7 +14,7 @@ use reg_watcher::*;
 fn main() {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let reg_key = hklm.open_subkey(r#"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"#).unwrap();
-    let w = Watcher::new(reg_key, filter::REG_LEGAL_CHANGE_FILTER, true, Duration::from_secs(1));
+    let mut w = Watcher::new(reg_key, filter::REG_LEGAL_CHANGE_FILTER, true, Duration::from_secs(1));
     let (sender, receiver) = channel();
     let _ = w.watch_async(sender);
 

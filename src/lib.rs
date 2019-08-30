@@ -257,26 +257,29 @@ impl Watcher {
     /// Create a external thread to Watch a specific registry key.
     /// Pass `WatchResponse` by predefined `Sender` 
     pub fn watch_async(
-        mut self,
+        &mut self,
         sender: Sender<WatchResponse>) -> Result<(), Error>
     {
         let builder = thread::Builder::new().name("reg-watcher".into());
         let reg_key = self.reg_key.take().ok_or(format_err!("watcher none registry key"))?;
-        
+        let notify_filter = self.notify_filter;
+        let watch_subtree = self.watch_subtree;
+        let tick_duration = self.tick_duration;
+
         //start the external watching thread
         let handle = builder.spawn(move || {
             loop {
                 match watch(
                     &reg_key,
-                    self.notify_filter,
-                    self.watch_subtree,
+                    notify_filter,
+                    watch_subtree,
                     Timeout::Infinite,
                 ) {
                     Err(e) => panic!("call watcher.watch err: {:?}", e),
                     Ok(v) => sender.send(v)
                         .unwrap_or_else(|e| panic!("invalid sender: {:?}", e)),
                 };
-                thread::sleep(self.tick_duration);
+                thread::sleep(tick_duration);
             }
         })?;
         self.handle = Some(handle);
